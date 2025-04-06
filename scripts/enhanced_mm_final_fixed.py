@@ -15,9 +15,9 @@ from hummingbot.core.event.events import OrderFilledEvent
 from hummingbot.client.config.config_data_types import BaseClientModel, ClientFieldData
 from pydantic import Field
 
-# ------------------------------
+
 # Config Class for User Inputs
-# ------------------------------
+
 class EnhancedConfig(BaseClientModel):
     script_file_name: str = Field(default_factory=lambda: os.path.basename(__file__))
     exchange: str = Field("binance", client_data=ClientFieldData(prompt_on_new=True))
@@ -25,10 +25,12 @@ class EnhancedConfig(BaseClientModel):
     order_amount: Decimal = Field(1, client_data=ClientFieldData(prompt_on_new=True))
     spread: Decimal = Field(0.002, client_data=ClientFieldData(prompt_on_new=True))
     interval: int = Field(15, client_data=ClientFieldData(prompt_on_new=True))
+    max_position_ratio: Decimal = Field(0.2, client_data=ClientFieldData(prompt_on_new=True))
+    volatility_threshold: Decimal = Field(0.15, client_data=ClientFieldData(prompt_on_new=True))
 
-# ------------------------------
+
 # Strategy Class
-# ------------------------------
+
 class EnhancedMM(ScriptStrategyBase):
     def __init__(self, connectors: Dict[str, ExchangeBase], config: EnhancedConfig):
         super().__init__(connectors)
@@ -40,6 +42,8 @@ class EnhancedMM(ScriptStrategyBase):
         self.bid_price = 0.0
         self.ask_price = 0.0
         self.mid_price = 0.0
+        self.base_balance = Decimal(0)
+        self.quote_balance = Decimal(0)
 
     def on_tick(self):
         if self.current_timestamp < self.last_tick + self.config.interval:
@@ -48,18 +52,35 @@ class EnhancedMM(ScriptStrategyBase):
         try:
             self.cancel_all_orders()
             self.fetch_indicators()
+            self.fetch_inventory()
+
+            if self.natr > self.config.volatility_threshold:
+                self.logger().warning("[CIRCUIT BREAKER] High volatility detected. Skipping order placement.")
+                return
+
             self.mid_price = self.connectors[self.config.exchange].get_price_by_type(
                 self.config.trading_pair, PriceType.MidPrice)
+
             spread_multiplier = 1 + self.natr * 0.01
             shifted_mid = self.mid_price * (1 + self.shift)
 
-            self.bid_price = shifted_mid * (1 - self.config.spread * spread_multiplier)
-            self.ask_price = shifted_mid * (1 + self.config.spread * spread_multiplier)
+            inventory_ratio = self.base_balance * self.mid_price / (self.base_balance * self.mid_price + self.quote_balance + 1e-8)
+            inventory_asymmetry = 1 + ((0.5 - inventory_ratio) * 2)
+
+            bid_price = shifted_mid * (1 - self.config.spread * spread_multiplier * (2 - inventory_asymmetry))
+            ask_price = shifted_mid * (1 + self.config.spread * spread_multiplier * inventory_asymmetry)
+
+            position_value = self.base_balance * self.mid_price + self.quote_balance
+            position_size = min(self.config.order_amount, position_value * self.config.max_position_ratio / self.mid_price)
+
+            self.bid_price = bid_price
+            self.ask_price = ask_price
 
             buy_order = OrderCandidate(self.config.trading_pair, True, OrderType.LIMIT, TradeType.BUY,
-                                       self.config.order_amount, Decimal(str(self.bid_price)))
+                                       position_size, Decimal(str(bid_price)))
             sell_order = OrderCandidate(self.config.trading_pair, True, OrderType.LIMIT, TradeType.SELL,
-                                        self.config.order_amount, Decimal(str(self.ask_price)))
+                                        position_size, Decimal(str(ask_price)))
+
             orders = self.connectors[self.config.exchange].budget_checker.adjust_candidates([buy_order, sell_order])
 
             for order in orders:
@@ -78,6 +99,10 @@ class EnhancedMM(ScriptStrategyBase):
         self.natr = ta.natr(df["high"], df["low"], df["close"], length=14).iloc[-1]
         self.shift = 0.002 * (1 if self.rsi > 60 else -1 if self.rsi < 40 else 0)
 
+    def fetch_inventory(self):
+        self.base_balance = self.connectors[self.config.exchange].get_balance(self.config.trading_pair.split("-")[0])
+        self.quote_balance = self.connectors[self.config.exchange].get_balance(self.config.trading_pair.split("-")[1])
+
     def format_status(self) -> str:
         return "\n".join([
             f"Enhanced Market Maker - {self.config.exchange} {self.config.trading_pair}",
@@ -88,7 +113,9 @@ class EnhancedMM(ScriptStrategyBase):
             f"RSI_14             : {self.rsi:.2f}",
             f"NATR_14            : {self.natr:.4f}",
             f"Spread Multiplier  : {(1 + self.natr * 0.01):.4f}",
-            f"Price Shift Factor : {self.shift:.4f}"
+            f"Price Shift Factor : {self.shift:.4f}",
+            f"Base Inventory     : {self.base_balance:.4f}",
+            f"Quote Inventory    : {self.quote_balance:.2f}"
         ])
 
     def did_fill_order(self, event: OrderFilledEvent):
