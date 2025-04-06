@@ -15,6 +15,8 @@ from hummingbot.core.event.events import OrderFilledEvent
 from hummingbot.client.config.config_data_types import BaseClientModel, ClientFieldData
 from pydantic import Field
 
+# Explanation: 
+# It places dynamic bid and ask orders around the mid-price, adjusting spread width based on market volatility (NATR) and shifting price based on trend direction (RSI).It includes inventory-based spread skew to auto-balance asset holdings, and a circuit breaker that halts trading during extreme volatility.Order sizes are also adjusted dynamically based on portfolio value, making it a responsive, risk-aware market making solution.
 
 # Config Class for User Inputs
 
