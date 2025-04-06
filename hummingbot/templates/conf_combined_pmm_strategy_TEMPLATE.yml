@@ -1,0 +1,27 @@
+# conf_combined_pmm_strategy_TEMPLATE.yml
+# This YAML template defines the default config values and descriptions for the combined_pmm strategy.
+
+strategy: combined_pmm_strategy
+
+# Exchange and market
+exchange: BINANCE            # e.g. BINANCE, COINBASE, etc. (case-insensitive)
+trading_pair: ""             # e.g. ETH-USDT (to be filled by user)
+order_amount: 0.01           # Default order amount in base asset
+
+# Basic strategy settings
+order_refresh_time: 15.0     # in seconds, how often to cancel and repost orders
+
+# Inventory management
+inventory_skew_enabled: true          # (For reference only, our strategy always skews inventory)
+target_base_pct: 50.0                 # target inventory split (% in base asset, here 50%)
+
+# Candles and indicators
+candles_interval: 1m                  # Candlestick interval for indicators (e.g. 1m)
+candles_length: 30                    # Number of candles to use for RSI/NATR calculations
+
+# Advanced: spread and shift parameters (generally use defaults)
+bid_spread_scalar: 120                # multiplier for bid spread (in bps relative to NATR)
+ask_spread_scalar: 60                 # multiplier for ask spread (in bps relative to NATR)
+max_shift_spread: 0.0001              # max shift (fraction) for price adjustments (0.0001 = 1 bps)
+trend_scalar: -1                      # trend behavior: -1 for contrarian (default), +1 for momentum-following
+inventory_scalar: 1                   # inventory sensitivity scalar (1 = default)
